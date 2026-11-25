@@ -1,0 +1,210 @@
+diff --git a/src/portable/raspberrypi/rp2040/hcd_rp2040.c b/src/portable/raspberrypi/rp2040/hcd_rp2040.c
+index 2c0a3fd..cd700ee 100644
+--- a/src/portable/raspberrypi/rp2040/hcd_rp2040.c
++++ b/src/portable/raspberrypi/rp2040/hcd_rp2040.c
+@@ -76,6 +76,96 @@ static struct hw_endpoint *get_dev_ep(uint8_t dev_addr, uint8_t ep_addr)
+   return NULL;
+ }
+ 
++//--------------------------------------------------------------------+
++// Isochronous IN streaming (PicoVerse SingStar extension, see hcd_rp2_iso.h)
++//--------------------------------------------------------------------+
++#include "hcd_rp2_iso.h"
++
++static struct hw_endpoint* volatile _iso_ep = NULL;
++static hcd_rp2_iso_rx_cb_t _iso_cb = NULL;
++static uint8_t  _iso_flags = 0;
++static uint16_t _iso_len = 0;
++volatile uint32_t hcd_rp2_iso_seq_errors = 0;
++volatile uint32_t hcd_rp2_iso_rx_timeouts = 0;
++
++static void __tusb_irq_path_func(_iso_arm)(struct hw_endpoint* ep)
++{
++  uint32_t bc = (uint32_t) _iso_len | USB_BUF_CTRL_AVAIL | USB_BUF_CTRL_SEL;
++  if ( (_iso_flags & HCD_RP2_ISO_PID_TOGGLE) && ep->next_pid ) bc |= USB_BUF_CTRL_DATA1_PID;
++  ep->next_pid ^= 1u;
++  if ( _iso_flags & HCD_RP2_ISO_LAST ) bc |= USB_BUF_CTRL_LAST;
++  // write everything but AVAIL first, then AVAIL (datasheet "concurrent access")
++  *ep->buffer_control = bc & ~USB_BUF_CTRL_AVAIL;
++  busy_wait_at_least_cycles(12);
++  *ep->buffer_control = bc;
++}
++
++static void __tusb_irq_path_func(_iso_handle)(uint32_t bit, struct hw_endpoint* ep)
++{
++  usb_hw_clear->buf_status = bit;
++  uint32_t const bc = *ep->buffer_control;
++  uint16_t const len = (bc & USB_BUF_CTRL_FULL) ? (uint16_t) (bc & USB_BUF_CTRL_LEN_MASK) : 0;
++  if ( _iso_cb ) _iso_cb((uint8_t const*) ep->hw_data_buf, len, (uint16_t) usb_hw->sof_rd);
++  if ( _iso_ep == ep ) _iso_arm(ep);
++}
++
++bool hcd_rp2_iso_start(uint8_t dev_addr, uint8_t ep_addr, uint16_t buflen, uint8_t flags, hcd_rp2_iso_rx_cb_t cb)
++{
++  struct hw_endpoint* ep = get_dev_ep(dev_addr, ep_addr);
++  if ( !ep || ep == &epx || !ep->configured ) return false;
++  if ( buflen == 0 || buflen > 64 ) buflen = 64;   // interrupt-endpoint slots have a 64 byte buffer
++
++  irq_set_enabled(USBCTRL_IRQ, false);
++  _iso_len   = buflen;
++  _iso_flags = flags;
++  _iso_cb    = cb;
++  ep->next_pid = 0;
++  ep->active   = true;   // keeps the TinyUSB core from using this endpoint
++  _iso_ep    = ep;
++  _iso_arm(ep);
++  irq_set_enabled(USBCTRL_IRQ, true);
++  return true;
++}
++
++static void _iso_release(struct hw_endpoint* ep)
++{
++  usb_hw_clear->int_ep_ctrl = (1u << (ep->interrupt_num + 1));
++  usb_hw->int_ep_addr_ctrl[ep->interrupt_num] = 0;
++  ep->configured = false;
++  *ep->endpoint_control = 0;
++  *ep->buffer_control = 0;
++  hw_endpoint_reset_transfer(ep);
++}
++
++void hcd_rp2_iso_stop(void)
++{
++  irq_set_enabled(USBCTRL_IRQ, false);
++  struct hw_endpoint* ep = _iso_ep;
++  _iso_ep = NULL;
++  _iso_cb = NULL;
++  if ( ep ) _iso_release(ep);
++  irq_set_enabled(USBCTRL_IRQ, true);
++}
++
++bool hcd_rp2_iso_kick(void)
++{
++  bool kicked = false;
++  irq_set_enabled(USBCTRL_IRQ, false);
++  struct hw_endpoint* ep = _iso_ep;
++  if ( ep && !(*ep->buffer_control & USB_BUF_CTRL_AVAIL) )
++  {
++    _iso_arm(ep);
++    kicked = true;
++  }
++  irq_set_enabled(USBCTRL_IRQ, true);
++  return kicked;
++}
++
++bool hcd_rp2_iso_active(void)
++{
++  return _iso_ep != NULL;
++}
++
+ TU_ATTR_ALWAYS_INLINE static inline uint8_t dev_speed(void)
+ {
+   return (usb_hw->sie_status & USB_SIE_STATUS_SPEED_BITS) >> USB_SIE_STATUS_SPEED_LSB;
+@@ -153,7 +243,14 @@ static void __tusb_irq_path_func(hw_handle_buff_status)(void)
+       if ( remaining_buffers & bit )
+       {
+         remaining_buffers &= ~bit;
+-        _handle_buff_status_bit(bit, &ep_pool[i]);
++        if ( &ep_pool[i] == _iso_ep )
++        {
++          _iso_handle(bit, &ep_pool[i]);
++        }
++        else
++        {
++          _handle_buff_status_bit(bit, &ep_pool[i]);
++        }
+       }
+     }
+   }
+@@ -235,6 +332,7 @@ static void __tusb_irq_path_func(hcd_rp2040_irq)(void)
+   {
+     handled |= USB_INTS_ERROR_RX_TIMEOUT_BITS;
+     usb_hw_clear->sie_status = USB_SIE_STATUS_RX_TIMEOUT_BITS;
++    hcd_rp2_iso_rx_timeouts++;
+   }
+ 
+   if ( status & USB_INTS_ERROR_DATA_SEQ_BITS )
+@@ -243,7 +341,17 @@ static void __tusb_irq_path_func(hcd_rp2040_irq)(void)
+     TU_LOG(3, "  Seq Error: [0] = 0x%04u  [1] = 0x%04x\r\n",
+            tu_u32_low16(*epx.buffer_control),
+            tu_u32_high16(*epx.buffer_control));
+-    panic("Data Seq Error \n");
++    if ( _iso_ep )
++    {
++      // An isochronous stream is running: count it and carry on. The
++      // stream watchdog (hcd_rp2_iso_kick) re-arms a dropped buffer.
++      handled |= USB_INTS_ERROR_DATA_SEQ_BITS;
++      hcd_rp2_iso_seq_errors++;
++    }
++    else
++    {
++      panic("Data Seq Error \n");
++    }
+   }
+ 
+   if ( status ^ handled )
+@@ -466,6 +574,12 @@ void hcd_device_close(uint8_t rhport, uint8_t dev_addr)
+ 
+   if (dev_addr == 0) return;
+ 
++  if ( _iso_ep && _iso_ep->dev_addr == dev_addr )
++  {
++    _iso_ep = NULL;
++    _iso_cb = NULL;
++  }
++
+   for (size_t i = 1; i < TU_ARRAY_SIZE(ep_pool); i++)
+   {
+     hw_endpoint_t* ep = &ep_pool[i];
+diff --git a/src/portable/raspberrypi/rp2040/hcd_rp2_iso.h b/src/portable/raspberrypi/rp2040/hcd_rp2_iso.h
+new file mode 100644
+index 0000000..32d1733
+--- /dev/null
++++ b/src/portable/raspberrypi/rp2040/hcd_rp2_iso.h
+@@ -0,0 +1,47 @@
++/*
++ * hcd_rp2_iso.h - isochronous IN streaming for the RP2040/RP2350 TinyUSB host
++ *
++ * Added for the PicoVerse SingStar microphone driver (Jzzy, 2026).
++ *
++ * TinyUSB's RP2 host controller driver has no isochronous support. This
++ * extension streams one isochronous IN endpoint through one of the
++ * hardware "interrupt" endpoint slots. Every received packet is handed to
++ * a callback straight from the USB interrupt and the buffer is re-armed at
++ * once, so no packet waits for tuh_task().
++ *
++ * Usage: open the endpoint with tuh_edpt_open() first (that programs the
++ * slot), then call hcd_rp2_iso_start(). Only one stream at a time.
++ */
++#ifndef HCD_RP2_ISO_H_
++#define HCD_RP2_ISO_H_
++
++#include <stdint.h>
++#include <stdbool.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++// Flags for hcd_rp2_iso_start()
++#define HCD_RP2_ISO_PID_TOGGLE  0x01u  // alternate DATA0/DATA1 (default: DATA0 always, as USB full-speed iso)
++#define HCD_RP2_ISO_LAST        0x02u  // set the LAST bit in buffer control
++
++// Called from the USB IRQ for every completed buffer.
++// data/len: received bytes (len 0 = buffer completed without data)
++// frame: current USB frame number (SOF counter)
++typedef void (*hcd_rp2_iso_rx_cb_t)(uint8_t const* data, uint16_t len, uint16_t frame);
++
++bool hcd_rp2_iso_start(uint8_t dev_addr, uint8_t ep_addr, uint16_t buflen, uint8_t flags, hcd_rp2_iso_rx_cb_t cb);
++void hcd_rp2_iso_stop(void);
++bool hcd_rp2_iso_kick(void);     // re-arm if the buffer is not armed (watchdog); true if re-armed
++bool hcd_rp2_iso_active(void);
++
++// Diagnostics (incremented in the IRQ)
++extern volatile uint32_t hcd_rp2_iso_seq_errors;
++extern volatile uint32_t hcd_rp2_iso_rx_timeouts;
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif
