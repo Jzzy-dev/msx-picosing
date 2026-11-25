@@ -6,6 +6,23 @@ everything: it reads the songs from the microSD card, plays the music,
 listens to both mics, scores the singing and draws the screen. The MSX2
 shows the picture and passes on the keys.
 
+<img width="1920" height="1200" alt="PicoSing logo@2x" src="https://github.com/user-attachments/assets/4ac85a14-93e4-40e1-a107-1ccf0de57dbf" />
+
+
+
+| <img width="2000" height="1126" alt="1" src="https://github.com/user-attachments/assets/3684b149-be0d-46be-ac25-827735c0cc67" /> | <img width="2000" height="1126" alt="2" src="https://github.com/user-attachments/assets/0d0d8e72-06c4-456d-bb10-5bddad70f6b2" />|
+| :--- | :--- |
+| <img width="2000" height="1126" alt="3" src="https://github.com/user-attachments/assets/a932234a-cc89-418e-b554-92cbd960453f" /> | <img width="2000" height="1126" alt="4" src="https://github.com/user-attachments/assets/71ffa1f2-9c3b-43ea-891e-c68c092ae8b8" />|
+| :--- | :--- |
+| <img width="2000" height="1126" alt="5" src="https://github.com/user-attachments/assets/581dc604-6d2b-493a-8050-974b0c210c31" />| <img width="2000" height="1126" alt="6" src="https://github.com/user-attachments/assets/5affe78f-1024-4af5-93f2-f503f9a830b6" />|
+| :--- | :--- |
+| <img width="2000" height="1126" alt="7 2 getting cover" src="https://github.com/user-attachments/assets/75cc25f4-550d-4aac-8e1f-a60051f65a4f" />| <img width="2000" height="1126" alt="8" src="https://github.com/user-attachments/assets/e57501fd-5e1a-4167-8e67-23b7e9136bb5" />|
+| :--- | :--- |
+| <img width="2000" height="1126" alt="9 play" src="https://github.com/user-attachments/assets/e04824a2-3b1f-46f0-827b-45bd60febd06" />| <img width="2000" height="1126" alt="10 singing" src="https://github.com/user-attachments/assets/794c5c2c-0b0c-466d-bcd0-9ee925466355" />|
+| :--- | :--- |
+| <img width="2000" height="1126" alt="10" src="https://github.com/user-attachments/assets/a7bc9109-e43a-4ac4-8626-9c88b87f4eb9" /> | <img width="2000" height="1126" alt="11 results" src="https://github.com/user-attachments/assets/aaf4469c-bb07-4324-bd48-07de86a656fa" />|
+
+
 **Version 0.7: online.** PicoSing uses the PicoVerse's WiFi (the ESP-01, with the WiFi settings
 it already has).
 - **FIND SONGS (USDB):** search [USDB](https://usdb.animux.de) from the MSX by artist and/or
