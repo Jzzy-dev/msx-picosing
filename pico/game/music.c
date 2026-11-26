@@ -6,6 +6,8 @@
 #include "platform.h"
 #include "settings.h"
 #include "pclink.h"
+#include "pcfs.h"
+#include "library.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -18,6 +20,20 @@ bool music_start(int i, const song_t *s, char *err, int n)
     // the PC's player when chosen, or when there is no MP3 and a PC is set
     char dir[200], p[300];
     bool have_mp3 = false;
+    const char *txt = lib_path(i);
+    if (txt && pcfs_is(txt))
+    {
+        // a song of the PC's folder: its MP3 plays on the PC (PicoAmp for Windows' player)
+        on_pc = true;
+        const char *rel = pcfs_rel(txt), *sl = strrchr(rel, '/');
+        if (s->audio[0] && sl && snprintf(p, sizeof p, "%.*s/%s", (int)(sl - rel), rel, s->audio) < (int)sizeof p)
+        {
+            if (!pc_start_file(s, p)) { snprintf(err, (size_t)n, "%s", pc_message()); return false; }
+        }
+        else if (!pc_start(s)) { snprintf(err, (size_t)n, "%s", pc_message()); return false; }   // (no MP3: its video or a search)
+        if (g_set.volume >= 0) pc_set_volume(g_set.volume);
+        return true;
+    }
     if (s->audio[0] && plat_song_dir(i, dir, sizeof dir))
     {
         snprintf(p, sizeof p, "%s/%s", dir, s->audio);

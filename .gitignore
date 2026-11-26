@@ -2,3 +2,4 @@ build/
 *.o
 *.ppm
 out/
+pico/lib/

@@ -29,37 +29,67 @@ static bool valid_utf8(const unsigned char *p, size_t n)
 
 static bool g_utf8 = true;
 
-// Windows-1252 0x80-0x9F that have a Latin-1 look-alike
-static char cp1252_fold(unsigned char c)
+// Windows-1252's 0x80-0x9F (a Latin-1 .txt is often that)
+static uint32_t cp1252(unsigned char b)
 {
-    switch (c)
-    {
-        case 0x91: case 0x92: return '\'';
-        case 0x93: case 0x94: return '"';
-        case 0x96: case 0x97: return '-';
-        case 0x85: return '.';
-        default: return '?';
-    }
+    static const uint16_t w[32] = {
+        0x20AC, 0, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0, 0x017D, 0,
+        0, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0, 0x017E, 0x0178 };
+    return b >= 0x80 && b < 0xA0 ? w[b - 0x80] : b;
 }
 
-static char cp_to_latin1(uint32_t cp)
+// a letter outside Latin-1 as the nearest one in it (the font has Latin-1):
+// Latin Extended-A (Polish, Czech, Hungarian, Turkish ...) without its accent,
+// Cyrillic and Greek letter by letter, the typographic signs as plain ones;
+// 0: left out (zero width, emoji). The same tables as PicoAmp's engine.
+static const char lat_a[] =                     // U+0100 - U+017F
+    "AaAaAaCcCcCcCcDdDdEeEeEeEeEeGgGgGgGgHhHhIiIiIiIiIiIiJjKkkLlLlLlLlLlNnNnNnnNnOoOoOoOoRrRrRrSsSsSsSsTtTtTtUuUuUuUuUuUuWwYyYZzZzZzs";
+static const char cyr[] =                       // U+0410 - U+044F
+    "ABVGDEZZIJKLMNOPRSTUFHCCSS'Y'EUAabvgdezzijklmnoprstufhccss'y'eua";
+static const char grk[] =                       // U+0391 - U+03C9
+    "ABGDEZITIKLMNXOPR?STYFHPOiyaeiiyabgdezitiklmnxoprsstyfhpo";
+
+char song_fold_cp(uint32_t c)
 {
-    if (cp < 0x80) return (char)cp;
-    if (cp >= 0xA0 && cp <= 0xFF) return (char)cp;
-    switch (cp)
-    {
-        case 0x2018: case 0x2019: case 0x201B: case 0x2032: return '\'';
-        case 0x201C: case 0x201D: case 0x201E: return '"';
-        case 0x2013: case 0x2014: return '-';
-        case 0x2026: return '.';
-        case 0x0152: return 'O';   // OE
-        case 0x0153: return 'o';
-        case 0x0160: return 'S';
-        case 0x0161: return 's';
-        case 0x017D: return 'Z';
-        case 0x017E: return 'z';
-        default: return '?';
-    }
+    if (c == '\t') return ' ';
+    if (c < 0x20 || c == 0x7F) return c ? '?' : 0;
+    if (c < 0x7F || (c >= 0xA0 && c <= 0xFF)) return c == 0xAD ? 0 : (char)c;
+    if (c >= 0x100 && c < 0x180) return lat_a[c - 0x100];
+    if (c == 0x178) return 'Y';
+    if (c == 0x192) return 'f';
+    if (c == 0x218 || c == 0x21A) return c == 0x218 ? 'S' : 'T';         // Ș Ț
+    if (c == 0x219 || c == 0x21B) return c == 0x219 ? 's' : 't';
+    if (c == 0x2C6) return '^';
+    if (c == 0x2DC) return '~';
+    if (c == 0x401) return (char)0xCB;                                   // Ё: Ë
+    if (c == 0x451) return (char)0xEB;
+    if (c >= 0x410 && c < 0x450) return cyr[c - 0x410];
+    if (c == 0x404 || c == 0x454) return c == 0x404 ? 'E' : 'e';
+    if (c == 0x406 || c == 0x407) return c == 0x406 ? 'I' : (char)0xCF;  // І Ї
+    if (c == 0x456 || c == 0x457) return c == 0x456 ? 'i' : (char)0xEF;
+    if (c >= 0x391 && c <= 0x3C9) return grk[c - 0x391];
+    if (c >= 0x386 && c <= 0x38F) return "A.EII?O?YO"[c - 0x386];
+    if (c >= 0x3AC && c <= 0x3B0) return "aeiiy"[c - 0x3AC];
+    if (c >= 0x3CA && c <= 0x3CE) return "iyoyo"[c - 0x3CA];
+    if (c == 0x1E9E) return (char)0xDF;                                  // ẞ
+    if (c >= 0x1EA0 && c <= 0x1EF9)                                       // Vietnamese: the vowel
+        return "AaAaAaAaAaAaAaAaAaAaAaAaEeEeEeEeEeEeEeEeIiIiOoOoOoOoOoOoOoOoOoOoOoOoUuUuUuUuUuUuUuYyYyYyYy"[c - 0x1EA0];
+    if (c == 0x2022 || c == 0x2027 || c == 0x2020 || c == 0x2021) return '*';
+    if (c == 0x2032 || c == 0x2018 || c == 0x2019 || c == 0x201B || c == 0x2039 || c == 0x203A) return '\'';
+    if (c == 0x201A) return ',';
+    if (c == 0x201C || c == 0x201D || c == 0x201E || c == 0x201F || c == 0x2033) return '"';
+    if (c >= 0x2010 && c <= 0x2015) return '-';
+    if (c == 0x2026) return '.';
+    if (c == 0x2030) return '%';
+    if (c == 0x20AC) return 'E';
+    if (c == 0x2122) return 0;
+    if (c == 0x266A || c == 0x266B || c == 0x266C) return '*';          // ♪ ♫ (in some lyrics)
+    if (c == 0x200B || c == 0x200C || c == 0x200D || c == 0x2060 || c == 0xFEFF || (c >= 0xFE00 && c <= 0xFE0F)) return 0;
+    if ((c >= 0x2190 && c <= 0x21FF) || (c >= 0x2300 && c <= 0x23FF) || (c >= 0x25A0 && c <= 0x27BF) ||
+        (c >= 0x2B00 && c <= 0x2BFF) || c >= 0x1F000) return 0;
+    if (c >= 0x2000 && c <= 0x200A) return ' ';
+    if (c >= 0x300 && c <= 0x36F) return 0;                              // a combining accent: the letter before stays
+    return '?';
 }
 
 static size_t to_latin1(char *dst, size_t size, const char *src, size_t len, bool utf8)
@@ -73,7 +103,8 @@ static size_t to_latin1(char *dst, size_t size, const char *src, size_t len, boo
         if (c == '\r' || c == '\n') break;
         if (!utf8 || c < 0x80)
         {
-            dst[o++] = (!utf8 && c >= 0x80 && c < 0xA0) ? cp1252_fold(c) : (char)c;
+            char f = song_fold_cp(utf8 ? c : cp1252(c));
+            if (f) dst[o++] = f;
             i++;
             continue;
         }
@@ -86,7 +117,8 @@ static size_t to_latin1(char *dst, size_t size, const char *src, size_t len, boo
         if (i + (size_t)extra >= len + 1) break;
         for (int k = 1; k <= extra && i + (size_t)k < len; k++) cp = (cp << 6) | (p[i + k] & 0x3F);
         i += (size_t)extra + 1;
-        dst[o++] = cp_to_latin1(cp);
+        char f = song_fold_cp(cp);
+        if (f) dst[o++] = f;
     }
     if (size) dst[o < size ? o : size - 1] = 0;
     return o;

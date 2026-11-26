@@ -13,6 +13,7 @@
 // memory there is for it): a small tag reader picks out the rows and cells.
 
 #include "usdb.h"
+#include "pcfs.h"
 #include "platform.h"
 #include "settings.h"
 #include "song.h"
@@ -504,13 +505,20 @@ bool usdb_more(void)
     return begin(J_SEARCH);
 }
 
-// a name for the card: no \ / : * ? " < > |, no letters FatFs may not take
+// a name for the card: no \ / : * ? " < > |; its accented letters (Latin-1) in UTF-8, as FatFs keeps names
 static void clean(char *out, size_t size, const char *s)
 {
     size_t o = 0;
     for (; *s && o + 1 < size; s++)
     {
         unsigned char c = (unsigned char)*s;
+        if (c >= 0xA0)
+        {
+            if (o + 2 >= size) break;
+            out[o++] = (char)(0xC0 | (c >> 6));
+            out[o++] = (char)(0x80 | (c & 0x3F));
+            continue;
+        }
         if (c < 32 || c > 126 || strchr("\\/:*?\"<>|", c)) c = c > 126 ? '_' : ' ';
         if (c == ' ' && (o == 0 || out[o - 1] == ' ')) continue;
         out[o++] = (char)c;
@@ -527,7 +535,8 @@ bool usdb_download(int i)
     clean(a, sizeof a, hits[i].artist);
     clean(t, sizeof t, hits[i].title);
     snprintf(name, sizeof name, "%s - %s", a[0] ? a : "Unknown", t[0] ? t : "Song");
-    snprintf(folder, sizeof folder, "%s/USDB/%s", plat_song_root(), name);
+    const char *root = pcfs_is(plat_song_root()) ? plat_card_root() : plat_song_root();   // (the PC's folder: to the card)
+    snprintf(folder, sizeof folder, "%s/USDB/%s", root, name);
     if (!plat_mkdir(folder)) { set_msg("CANNOT MAKE THE FOLDER"); state = U_ERROR; return false; }
     snprintf(txt_path, sizeof txt_path, "%s/%s.txt", folder, name);
     snprintf(cover_path, sizeof cover_path, "%s/%s [CO].jpg", folder, name);

@@ -23,6 +23,34 @@ shows the picture and passes on the keys.
 | <img width="2000" height="1126" alt="10" src="https://github.com/user-attachments/assets/a7bc9109-e43a-4ac4-8626-9c88b87f4eb9" /> | <img width="2000" height="1126" alt="11 results" src="https://github.com/user-attachments/assets/aaf4469c-bb07-4324-bd48-07de86a656fa" />|
 
 
+**Version 0.8: songs on the PC, and more letters.**
+- **The PC's folders:** the song folder can be a folder on the PC, through PicoAmp for Windows
+  (its MSX link on, **K**, and the PC set in SETTINGS).
+  - SONG FOLDER, then BS up to the card's top: **[ THE PC'S FOLDERS ]** shows PicoAmp for
+    Windows' karaoke folder: its music folder, or `karaoke =` under `[usdb]` in its `picoamp.ini`.
+    Browse it as the card's, and **[ SING FROM THIS FOLDER ]**. **[ THE CARD'S FOLDERS ]** goes
+    back.
+  - The songs are UltraStar folders as on the card (the `.txt`, its MP3, its cover), up to 4
+    folders deep. The PC sends the whole list at once, and each song's `.txt` and cover when
+    it is opened.
+  - **The music plays on the PC**, in PicoAmp for Windows' own player. PicoSing follows its
+    time as with a YouTube video (`,` and `.` still move the sound against the notes). A song
+    without an MP3 opens its YouTube video or a Spotify search, as before.
+  - No preview on the details screen, and tags and deleting are for the PC itself. Songs found
+    on USDB go to the card's song folder.
+  - The choice is remembered. If the PC doesn't answer at the start, the card's folder is used.
+  - DLNA media servers can't be used: they don't hand out the `.txt` files, only the music.
+  - Needs PicoAmp for Windows with `/sing/songs` (from 2026-11-26).
+- **More letters:** text outside Latin-1 no longer shows as `?`.
+  - Polish, Czech, Hungarian, Turkish, Romanian and Vietnamese letters show without their
+    accent (ł → l, ő → o, ş → s); Cyrillic and Greek letter by letter; typographic quotes,
+    dashes and `…` as plain ones; emoji are left out.
+  - The same for MP3 tags in UTF-16 (emoji too), Windows-1252 `.txt` files (€, Œ, š …), and
+    the MP3's own tags, which used to lose their accents.
+  - The card's folder names (UTF-8) show their accents on the SONG FOLDER screen.
+  - Songs saved from USDB keep their accents in their folder names (`Björk - …` instead of
+    `Bj_rk - …`).
+
 **Version 0.7: online.** PicoSing uses the PicoVerse's WiFi (the ESP-01, with the WiFi settings
 it already has).
 - **FIND SONGS (USDB):** search [USDB](https://usdb.animux.de) from the MSX by artist and/or
@@ -322,7 +350,7 @@ The included UF2 was built with clang 18 and picolibc.
 G="pico/game/game.c pico/game/song.c pico/game/fb.c pico/game/dlist.c pico/game/library.c
    pico/game/screen_link.c pico/game/menus.c pico/game/title.c pico/game/singers.c
    pico/game/cover.c pico/game/id3.c pico/game/tjpgd/tjpgd.c pico/game/settings.c
-   pico/game/scratch.c pico/game/music.c pico/game/pclink.c pico/game/usdb.c
+   pico/game/scratch.c pico/game/music.c pico/game/pclink.c pico/game/usdb.c pico/game/pcfs.c
    pico/net/esp.c pico/net/web.c tests/fake_esp.c"
 I="-Ipico -Ipico/game -Ipico/game/tjpgd"
 gcc -O2 -o test_song tests/test_song.c pico/game/song.c -lm && ./test_song

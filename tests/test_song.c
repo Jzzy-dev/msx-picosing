@@ -68,6 +68,35 @@ int main(void)
     const char *n = "just some text\nwith lines\n";
     CHECK(!song_parse(n, strlen(n), &s, false), "rejects non-UltraStar");
 
+    // text: Latin-1 kept, the rest the nearest Latin-1 letter (the font's), emoji left out
+    {
+        char o[64];
+        static const struct { const char *in, *out; } tx[] = {
+            { "Caf\xC3\xA9 M\xC3\xBCnchen", "Caf\xE9 M\xFCnchen" },                           // UTF-8 Latin-1: kept
+            { "Pi\xC5\x82sudski \xC5\x81\xC3\xB3""d\xC5\xBA", "Pilsudski L\xF3""dz" },          // Polish
+            { "\xC4\x8C""esk\xC3\xA1 \xC5\x99""e\xC4\x8D", "Cesk\xE1 rec" },                    // Czech
+            { "Bart\xC3\xB3k \xC5\x91r\xC3\xBCl", "Bart\xF3k or\xFCl" },                        // Hungarian
+            { "\xC4\xB0stanbul \xC5\x9F""ark\xC4\xB1", "Istanbul sarki" },                      // Turkish
+            { "\xD0\x9C\xD0\xBE\xD1\x81\xD0\xBA\xD0\xB2\xD0\xB0", "Moskva" },                  // Cyrillic
+            { "\xCE\x91\xCE\xB8\xCE\xAE\xCE\xBD\xCE\xB1", "Atina" },                            // Greek
+            { "It\xE2\x80\x99s \xE2\x80\x9Cme\xE2\x80\x9D \xE2\x80\x94 ok\xE2\x80\xA6", "It's \"me\" - ok." },
+            { "Love \xF0\x9F\x92\x96 you", "Love  you" },                                     // emoji: left out
+            { "Vi\xE1\xBB\x87t Nam", "Viet Nam" },                                            // Vietnamese
+            { "\x93Hello\x94 \x96 \x80 \x8A""a", "\"Hello\" - E Sa" },                          // Windows-1252
+            { "Ni\xC3\xB1o \xC3\x9F", "Ni\xF1o \xDF" },
+        };
+        for (size_t k = 0; k < sizeof tx / sizeof tx[0]; k++)
+        {
+            song_to_latin1(o, sizeof o, tx[k].in, strlen(tx[k].in));
+            CHECK(!strcmp(o, tx[k].out), "text %u: [%s] want [%s]", (unsigned)k, o, tx[k].out);
+        }
+        const char *lyr = "#TITLE:\xD0\x9B\xD1\x8E\xD0\xB1\xD0\xBE\xD0\xB2\xD1\x8C\n#ARTIST:Zespo\xC5\x82\n#BPM:300\n#GAP:0\n: 0 2 5 \xC5\xBC\xC3\xB3\xC5\x82\n: 4 2 5 w\xE2\x80\x99\n- 8\nE\n";
+        CHECK(song_parse(lyr, strlen(lyr), &s, false), "parse the Polish/Russian song");
+        CHECK(!strcmp(s.title, "Lubov'") && !strcmp(s.artist, "Zespol"), "a song's title and artist [%s] [%s]", s.title, s.artist);
+        CHECK(!strcmp(txt(&s.notes[0]), "z\xF3l"), "its syllable [%s]", txt(&s.notes[0]));
+        CHECK(!strcmp(txt(&s.notes[1]), "w'"), "its syllable [%s]", txt(&s.notes[1]));
+    }
+
     printf(fails ? "%d FAILED\n" : "ALL OK\n", fails);
     return fails != 0;
 }
