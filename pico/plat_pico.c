@@ -22,6 +22,7 @@
 #include "audio/audio_hal.h"
 #include "plat_pico.h"
 #include "net/net_int.h"
+#include "game/pcfs.h"
 
 #define TXT_MAX     (48 * 1024)
 #define HEAD_MAX    (6 * 1024)
@@ -58,7 +59,8 @@ static bool read_file(const char *path, char *buf, size_t max, size_t *len)
     return true;
 }
 
-static char song_root[128];
+static char song_root[128], card_root[128] = "0:/KARAOKE";
+const char *plat_card_root(void) { return card_root; }
 
 static void add_song(const char *folder_path, const char *folder, const char *name)
 {
@@ -111,6 +113,7 @@ static int scan_dir(const char *dir, const char *name, int depth)
 
 static int rescan(void)
 {
+    if (pcfs_is(song_root)) return pcfs_scan(song_root);
     lib_clear();
     int n = scan_dir(song_root, "", 0);
     lib_sort();
@@ -121,14 +124,41 @@ const char *plat_song_root(void) { return song_root; }
 
 bool plat_set_song_root(const char *path)
 {
+    if (pcfs_is(path))
+    {
+        // the PC's folder: its songs from PicoAmp for Windows; no answer: the folder before stays
+        int n = pcfs_scan(path);
+        if (n < 0) return false;          // (the list before stays)
+        snprintf(song_root, sizeof song_root, "%s", path);
+        problem = NULL;
+        return true;
+    }
     snprintf(song_root, sizeof song_root, "%s", path);
     int n = rescan();
     problem = n < 0 ? "CANNOT READ THE FOLDER" : NULL;
+    if (n >= 0) snprintf(card_root, sizeof card_root, "%s", path);
     return n >= 0;
 }
 
+// the PC's folder, chosen last time: after the settings (its address), at the start
+static bool pc_root_due;
+void plat_late_init(void)
+{
+    if (!pc_root_due) return;
+    pc_root_due = false;
+    char r[sizeof song_root];
+    snprintf(r, sizeof r, "%s", song_root);
+    const char *dflt = strstr(data_dir, "/SONGS/") ? "0:/SONGS" : "0:/KARAOKE";
+    snprintf(song_root, sizeof song_root, "%s", dflt);       // (the card's, when the PC does not answer)
+    if (pcfs_scan(r) >= 0) snprintf(song_root, sizeof song_root, "%s", r);
+    else { rescan(); problem = NULL; }
+}
+
+void plat_idle(void) { tight_loop_contents(); }
+
 int plat_list_dir(const char *path, plat_dirent_t *out, int max)
 {
+    if (pcfs_is(path)) return pcfs_list(path, out, max);
     DIR d;
     FILINFO fi;
     int n = 0;
@@ -145,14 +175,15 @@ int plat_list_dir(const char *path, plat_dirent_t *out, int max)
     return n;
 }
 
-bool plat_remove(const char *path) { return f_unlink(path) == FR_OK; }
-bool plat_rename(const char *from, const char *to) { return f_rename(from, to) == FR_OK; }
+bool plat_remove(const char *path) { return !pcfs_is(path) && f_unlink(path) == FR_OK; }
+bool plat_rename(const char *from, const char *to) { return !pcfs_is(from) && f_rename(from, to) == FR_OK; }
 
 // open files for the tag editor: two at a time
 static FIL ff[2];
 static bool ff_open[2];
 int plat_fopen(const char *path, bool write)
 {
+    if (pcfs_is(path)) return -1;
     for (int h = 0; h < 2; h++)
         if (!ff_open[h])
         {
@@ -186,6 +217,7 @@ void plat_init(void)
     // the song folder: the one chosen last time, else /KARAOKE or /SONGS
     const char *dflt = strstr(data_dir, "/SONGS/") ? "0:/SONGS" : "0:/KARAOKE";
     snprintf(song_root, sizeof song_root, "%s", dflt);
+    snprintf(card_root, sizeof card_root, "%s", dflt);
     char p[64];
     snprintf(p, sizeof p, "%s/SETTINGS.TXT", data_dir);
     size_t len;
@@ -199,6 +231,7 @@ void plat_init(void)
             if (k && k < sizeof song_root) { memcpy(song_root, r, k); song_root[k] = 0; }
         }
     }
+    if (pcfs_is(song_root)) { pc_root_due = true; problem = NULL; return; }   // (plat_late_init)
     int n = rescan();
     if (n < 0 && strcmp(song_root, dflt))      // the chosen folder is gone
     {
@@ -206,13 +239,18 @@ void plat_init(void)
         n = rescan();
     }
     problem = (n < 0) ? "NO /KARAOKE FOLDER" : NULL;
+    if (n >= 0) snprintf(card_root, sizeof card_root, "%s", song_root);
 }
 
 bool plat_song_load(int i, song_t *s, char *err, int n)
 {
     size_t len;
     const char *path = lib_path(i);
-    if (!path || !read_file(path, txt, TXT_MAX, &len)) { snprintf(err, (size_t)n, "CANNOT READ THE SONG"); return false; }
+    if (path && pcfs_is(path))
+    {
+        if (!pcfs_read(path, txt, TXT_MAX, &len)) { snprintf(err, (size_t)n, "%s", pcfs_error()); return false; }
+    }
+    else if (!path || !read_file(path, txt, TXT_MAX, &len)) { snprintf(err, (size_t)n, "CANNOT READ THE SONG"); return false; }
     if (!song_parse(txt, len, s, false)) { snprintf(err, (size_t)n, "NOT AN ULTRASTAR SONG"); return false; }
     return true;
 }
@@ -306,6 +344,7 @@ int32_t plat_audio_ms(void)
 
 bool plat_audio_preview(int i, const song_t *s, int32_t from_ms)
 {
+    if (pcfs_is(lib_path(i))) return false;              // (a PC's song: its music plays there, when sung)
     if (!audio_ok || !s->audio[0]) return false;
     music_on = false;
     char path[300];
@@ -324,7 +363,7 @@ bool plat_audio_preview(int i, const song_t *s, int32_t from_ms)
 bool plat_song_tags(int i, const song_t *s, song_tags_t *t)
 {
     memset(t, 0, sizeof *t);
-    if (!audio_ok || !s->audio[0] || playing) return false;
+    if (!audio_ok || !s->audio[0] || playing || pcfs_is(lib_path(i))) return false;    // (a PC's song: its MP3 stays there)
     char path[300];
     audio_path(i, s, path, sizeof path);
     static pva_track_info_t info;
@@ -366,6 +405,7 @@ bool plat_append_file(const char *p, const char *d, size_t n) { return put(p, FA
 
 bool plat_exists(const char *path)
 {
+    if (pcfs_is(path)) return pcfs_exists(path);
     static FILINFO fi;
     return f_stat(path, &fi) == FR_OK;
 }
@@ -382,8 +422,12 @@ bool plat_song_dir(int i, char *dir, size_t size)
 static FIL sf;
 static bool sf_open;
 static uint32_t sf_left;
+static bool sf_pc;
 bool plat_stream_open(const char *path, uint32_t off, uint32_t len)
 {
+    plat_stream_close();
+    sf_pc = pcfs_is(path);
+    if (sf_pc) return pcfs_stream_open(path, off, len);
     if (sf_open) f_close(&sf);
     sf_open = f_open(&sf, path, FA_READ) == FR_OK;
     if (!sf_open) return false;
@@ -393,6 +437,7 @@ bool plat_stream_open(const char *path, uint32_t off, uint32_t len)
 }
 size_t plat_stream_read(uint8_t *buf, size_t n)
 {
+    if (sf_pc) return pcfs_stream_read(buf, n);
     if (!sf_open) return 0;
     if (n > sf_left) n = sf_left;
     UINT br = 0;
@@ -400,7 +445,7 @@ size_t plat_stream_read(uint8_t *buf, size_t n)
     sf_left -= br;
     return br;
 }
-void plat_stream_close(void) { if (sf_open) f_close(&sf); sf_open = false; }
+void plat_stream_close(void) { if (sf_pc) { pcfs_stream_close(); sf_pc = false; } if (sf_open) f_close(&sf); sf_open = false; }
 
 // ---------------------------------------------------------------- pump
 static void music_pump(void)

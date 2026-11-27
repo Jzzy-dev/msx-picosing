@@ -2,6 +2,7 @@
 // menus.c - main menu, song list, song details (cover, tags, best scores,
 // preview), who sings, singers and the session's scores
 
+#include "pcfs.h"
 #include "game_int.h"
 #include "platform.h"
 #include "library.h"
@@ -176,6 +177,7 @@ void menus_ask_delete(void)
 {
     char dir[200];
     if (!lib_count() || !plat_song_dir(g_sel, dir, sizeof dir)) return;
+    if (pcfs_is(dir)) { gi_set_msg("ON THE PC: DELETE IT THERE"); return; }
     // the whole folder when this is its only song and it is not the song folder itself
     ask_whole = count_txt(dir) <= 1 && strcmp(dir, plat_song_root()) != 0;
     asking = true;
@@ -249,6 +251,7 @@ static void edit_open(void)
 {
     char dir[200];
     if (!g_song.audio[0] || !plat_song_dir(g_sel, dir, sizeof dir)) { gi_set_msg("THIS SONG HAS NO MP3"); return; }
+    if (pcfs_is(dir)) { gi_set_msg("ON THE PC: EDIT ITS TAGS THERE"); return; }
     snprintf(mp3_path, sizeof mp3_path, "%s/%s", dir, g_song.audio);
     stop_preview();
     if (!id3_read(mp3_path, &edit)) { gi_set_msg("CANNOT READ THE MP3"); return; }
@@ -330,6 +333,15 @@ static void draw_edit(fb_t *f)
 }
 
 // ---------------------------------------------------------------- song folder
+// a folder as shown: "/KARAOKE/80s" on the card, "PC /Karaoke" on the PC (its letters as the font has them)
+static void folder_shown(char *out, size_t n, const char *path)
+{
+    bool pc = pcfs_is(path);
+    const char *p = strchr(path, ':') ? strchr(path, ':') + 1 : path;
+    char l[96];
+    song_to_latin1(l, sizeof l, p, strlen(p));
+    snprintf(out, n, "%s%s", pc ? "PC " : "", l[0] ? l : "/");
+}
 #define FOLDERS_MAX 64
 static plat_dirent_t *fent;                // (the scratch buffer: the folders screen)
 static int fcount, fsel, ftop;
@@ -341,12 +353,23 @@ static int fcmp(const void *a, const void *b)
 }
 
 static bool has_parent(void) { return strchr(fpath, '/') != NULL; }
+// at the top of the card: the PC's folders (when a PC is set); at the PC's: the card's
+static bool has_switch(void) { return !has_parent() && (pcfs_is(fpath) || g_set.pc[0]); }
+static int nav_rows(void) { return has_parent() || has_switch() ? 1 : 0; }
+static char card_fpath[sizeof fpath];
 
 static void folders_load(void)
 {
     plat_dirent_t *all = scratch(SCR_DIR);
     fent = all + FOLDERS_MAX;
     int n = plat_list_dir(fpath, all, FOLDERS_MAX);
+    if (n < 0 && pcfs_is(fpath))
+    {
+        // the PC does not answer: back on the card
+        gi_set_msg(pcfs_error());
+        snprintf(fpath, sizeof fpath, "%s", card_fpath[0] ? card_fpath : plat_card_root());
+        n = plat_list_dir(fpath, all, FOLDERS_MAX);
+    }
     fcount = 0;
     for (int i = 0; i < n; i++)
         if (all[i].dir && strcasecmp(all[i].name, "PICOSING")) fent[fcount++] = all[i];
@@ -354,14 +377,21 @@ static void folders_load(void)
     fsel = ftop = 0;
 }
 
-// rows: 0 = sing from here, 1 = up (when there is one), then the folders
-static int frows(void) { return 1 + (has_parent() ? 1 : 0) + fcount; }
+// rows: 0 = sing from here, 1 = up (or the PC's / the card's folders at the top), then the folders
+static int frows(void) { return 1 + nav_rows() + fcount; }
 
 static void folders_key(uint8_t k)
 {
     int rows = frows();
     int up_row = has_parent() ? 1 : -1;
-    int first = has_parent() ? 2 : 1;
+    int first = 1 + nav_rows();
+    if ((k == KEY_RETURN || k == KEY_SPACE) && fsel == 1 && has_switch())
+    {
+        if (pcfs_is(fpath)) snprintf(fpath, sizeof fpath, "%s", card_fpath[0] ? card_fpath : plat_card_root());
+        else { snprintf(card_fpath, sizeof card_fpath, "%s", fpath); snprintf(fpath, sizeof fpath, "%s", PCFS_ROOT); }
+        folders_load();
+        return;
+    }
     if (k == KEY_ESC) gi_go(GS_MAIN);
     else if (k == KEY_UP) fsel = (fsel + rows - 1) % rows;
     else if (k == KEY_DOWN) fsel = (fsel + 1) % rows;
@@ -385,13 +415,13 @@ static void folders_key(uint8_t k)
 static void draw_folders(fb_t *f)
 {
     header(f, "SONG FOLDER");
-    const char *shown = strchr(fpath, ':') ? strchr(fpath, ':') + 1 : fpath;
-    if (!*shown) shown = "/";
+    char shown[96];
+    folder_shown(shown, sizeof shown, fpath);
     int n = (int)strlen(shown);
     int off = n > 31 ? n - 31 : 0;
     fb_text(f, 4, 15, shown + off, n - off, C_CYAN);
     int rows = frows();
-    int first = has_parent() ? 2 : 1;
+    int first = 1 + nav_rows();
     const int vis = 12;
     if (fsel < ftop) ftop = fsel;
     if (fsel >= ftop + vis) ftop = fsel - vis + 1;
@@ -403,17 +433,24 @@ static void draw_folders(fb_t *f)
         char t[80];
         uint8_t c = on ? C_WHITE : C_GREY;
         if (r == 0) { snprintf(t, sizeof t, "[ SING FROM THIS FOLDER ]"); c = on ? C_WHITE : C_GREEN; }
+        else if (r < first && has_switch()) { snprintf(t, sizeof t, pcfs_is(fpath) ? "[ THE CARD'S FOLDERS ]" : "[ THE PC'S FOLDERS ]"); c = on ? C_WHITE : C_CYAN; }
         else if (r < first) snprintf(t, sizeof t, ".. (UP)");
-        else snprintf(t, sizeof t, "%s/", fent[r - first].name);
+        else
+        {
+            // (names are UTF-8, on the card as on the PC)
+            char nm[64];
+            song_to_latin1(nm, sizeof nm, fent[r - first].name, strlen(fent[r - first].name));
+            snprintf(t, sizeof t, "%s/", nm);
+        }
         int len = (int)strlen(t);
         fb_text(f, 8, y, t, len > 30 ? 30 : len, c);
     }
-    const char *cur = plat_song_root();
-    const char *cs = strchr(cur, ':') ? strchr(cur, ':') + 1 : cur;
-    char t[64];
-    n = snprintf(t, sizeof t, "NOW: %s", *cs ? cs : "/");
+    char cs[96], t[112];
+    folder_shown(cs, sizeof cs, plat_song_root());
+    n = snprintf(t, sizeof t, "NOW: %s", cs);
     fb_text(f, 4, 178, t, n > 31 ? 31 : n, C_YELLOW);
-    fb_textz(f, 4, 188, "PC FOLDERS: IN A NEXT VERSION", C_DARK);
+    if (pcfs_is(fpath)) fb_textz(f, 4, 188, "THE MUSIC PLAYS ON THE PC", C_DARK);
+    else if (!g_set.pc[0]) fb_textz(f, 4, 188, "PC FOLDERS: SET THE PC IN SETTINGS", C_DARK);
     if (scan_due) gi_text_center(f, 100, " LOOKING FOR SONGS... ", 22, C_YELLOW);
     footer(f, "RETURN: OPEN  BS: UP  ESC");
 }
@@ -997,7 +1034,8 @@ static void draw_details(fb_t *f)
     if (tags.seconds) len = (int32_t)tags.seconds * 1000;
     n = snprintf(t, sizeof t, "%d:%02d %s", (int)(len / 60000), (int)(len / 1000 % 60), g_song.duet ? "DUET" : "");
     fb_text(f, x, y, t, n, C_GREY); y += 10;
-    if (tags.kbps) { n = snprintf(t, sizeof t, "%dKBPS %dKHZ", (int)tags.kbps, (int)(tags.rate / 1000)); fb_text(f, x, y, t, n, C_GREY); y += 10; }
+    if (pcfs_is(lib_path(g_sel)) && g_song.audio[0]) { fb_textz(f, x, y, "MUSIC: ON THE PC", C_CYAN); y += 10; }
+    else if (tags.kbps) { n = snprintf(t, sizeof t, "%dKBPS %dKHZ", (int)tags.kbps, (int)(tags.rate / 1000)); fb_text(f, x, y, t, n, C_GREY); y += 10; }
     else if (g_song.youtube[0]) { fb_textz(f, x, y, "NO MP3: YOUTUBE", C_CYAN); y += 10; }
     else if (!tags.ok) { fb_textz(f, x, y, "NO MP3", C_CYAN); y += 10; }
 

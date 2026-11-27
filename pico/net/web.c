@@ -359,6 +359,7 @@ void web_poll(web_t *w)
                 if (!timeout && (r != 0 || (ok && cstate != 4u && avail == 0))) { complete(w); return; }
                 w->wait_until = now;
             }
+            if (w->hold && w->st == W_BODY && !S->want_fn) { w->t_phase = now; return; }     // (it waits for room)
             if (!S->want_fn && now - w->t_phase >= QUIET_MS && now - w->state_asked >= QUIET_MS)
             {
                 uint8_t a = w->conn;

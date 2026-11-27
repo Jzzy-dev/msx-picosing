@@ -91,5 +91,7 @@ static inline const char *song_note_text(const song_t *s, const note_t *n) { ret
 // Convert UTF-8 or Latin-1 to the display charset (Latin-1, one byte per
 // character). Unknown characters become '?'. Returns the length.
 size_t song_to_latin1(char *dst, size_t size, const char *src, size_t len);
+// a Unicode letter as the Latin-1 one shown (the nearest; 0: left out)
+char song_fold_cp(uint32_t cp);
 
 #endif

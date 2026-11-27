@@ -101,21 +101,9 @@ int pva_kind_from_name(const char *name)
     return 0;
 }
 
-// Latin-1 / UTF-8 to plain ASCII for the MSX font: accents are dropped.
-char pva_fold_ascii(uint32_t c)
-{
-    if (c >= 0x20 && c < 0x7F) return (char)c;
-    if (c == 0xA0) return ' ';
-    if (c == 0x2022 || c == 0xB7) return '*';
-    if (c == 0x2032 || c == 0xB4) return '\'';
-    if (c == 0x200B || c == 0x200C || c == 0x200D || c == 0xFEFF || c == 0xAD) return 0;   // (zero width)
-    static const char map[] = "AAAAAAACEEEEIIIIDNOOOOOxOUUUUYTsaaaaaaaceeeeiiiidnooooo/ouuuuyty";
-    if (c >= 0xC0 && c <= 0xFF) return map[c - 0xC0];
-    if (c == 0x2018 || c == 0x2019) return '\'';
-    if (c == 0x201C || c == 0x201D) return '"';
-    if (c == 0x2013 || c == 0x2014) return '-';
-    return c ? '?' : 0;
-}
+// Latin-1 / UTF-8 to what PicoSing's font shows: Latin-1 (accents kept), the rest its nearest letter
+char song_fold_cp(uint32_t cp);
+char pva_fold_ascii(uint32_t c) { return song_fold_cp(c); }
 
 void pva_copy_ascii(char *dst, size_t size, const char *src, size_t src_len)
 {

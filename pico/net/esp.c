@@ -30,7 +30,7 @@ static int esp_trace = -1;
 #define TRACE(...) do { } while (0)
 #endif
 
-#define MAX_SLOTS   4
+#define MAX_SLOTS   6       // (the PC link 2, USDB, the PC's song folder 2)
 
 static esp_slot_t *slots[MAX_SLOTS];
 static uint8_t  nslots, turn;

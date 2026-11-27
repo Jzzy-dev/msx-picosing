@@ -69,6 +69,10 @@ bool plat_add_song(const char *txt_path);
 // scans it again (songs up to 4 folders deep) and remembers it
 const char *plat_song_root(void);
 bool plat_set_song_root(const char *path);
+// after the settings: the PC's song folder, when it was chosen last time ("PC:...", pcfs.h)
+void plat_late_init(void);
+// the card's song folder (the last one chosen on the card): USDB's songs go there when the PC's is chosen
+const char *plat_card_root(void);
 
 typedef struct { char name[64]; bool dir; uint32_t size; } plat_dirent_t;
 int  plat_list_dir(const char *path, plat_dirent_t *out, int max);   // -1: no folder

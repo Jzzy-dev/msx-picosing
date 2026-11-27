@@ -166,7 +166,7 @@ void title_draw(fb_t *f, uint32_t t)
         char ch = scroll_text[(first + i) % len];
         if (x > -8 && x < FB_W) fb_text(f, x, 186, &ch, 1, T_TEXT);
     }
-    fb_text(f, 4, 202, "v0.7", 4, T_SHADOW + 1);
+    fb_text(f, 4, 202, "v0.8", 4, T_SHADOW + 1);
 
     // the credits, bottom right: the letters change colour on the beat
     static const char by[] = "BY JZZY & CLAUDE 2026";

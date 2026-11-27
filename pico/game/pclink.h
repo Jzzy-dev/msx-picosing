@@ -19,6 +19,8 @@ enum { PC_OFF, PC_CONNECTING, PC_WAITING, PC_PLAYING, PC_FAILED };
 void pc_poll(void);
 // open the song on the PC (its YouTube video, else a Spotify search)
 bool pc_start(const song_t *s);
+// a song of the PC's song folder: its MP3 (the karaoke folder's path) plays in PicoAmp for Windows
+bool pc_start_file(const song_t *s, const char *file);
 void pc_go_now(void);                 // waiting: the player plays the song now
 void pc_stop(void);                   // pause the player, close the stream
 int  pc_state(void);

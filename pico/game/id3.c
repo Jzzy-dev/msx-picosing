@@ -37,19 +37,28 @@ static void text_of(const uint8_t *d, uint32_t n, char *out, size_t size)
     if (n < 2) return;
     uint8_t enc = d[0];
     d++; n--;
-    char tmp[160];
+    char tmp[320];
     size_t k = 0;
     if (enc == 1 || enc == 2)
     {
-        // UTF-16: what fits in Latin-1, the byte-order mark decides the order
+        // UTF-16 (the byte-order mark decides the order) to UTF-8, then as the rest
         bool le = enc == 1;
         if (n >= 2 && d[0] == 0xFF && d[1] == 0xFE) { le = true; d += 2; n -= 2; }
         else if (n >= 2 && d[0] == 0xFE && d[1] == 0xFF) { le = false; d += 2; n -= 2; }
-        for (uint32_t i = 0; i + 1 < n && k < sizeof tmp - 1; i += 2)
+        for (uint32_t i = 0; i + 1 < n && k + 4 < sizeof tmp; i += 2)
         {
-            unsigned c = le ? (unsigned)(d[i] | d[i + 1] << 8) : (unsigned)(d[i] << 8 | d[i + 1]);
+            uint32_t c = le ? (uint32_t)(d[i] | d[i + 1] << 8) : (uint32_t)(d[i] << 8 | d[i + 1]);
             if (!c) break;
-            tmp[k++] = (char)(c < 256 ? c : '?');
+            if (c >= 0xD800 && c < 0xDC00 && i + 3 < n)
+            {
+                // a surrogate pair (an emoji, say)
+                uint32_t c2 = le ? (uint32_t)(d[i + 2] | d[i + 3] << 8) : (uint32_t)(d[i + 2] << 8 | d[i + 3]);
+                if (c2 >= 0xDC00 && c2 < 0xE000) { c = 0x10000u + ((c - 0xD800u) << 10) + (c2 - 0xDC00u); i += 2; }
+            }
+            if (c < 0x80) tmp[k++] = (char)c;
+            else if (c < 0x800) { tmp[k++] = (char)(0xC0 | c >> 6); tmp[k++] = (char)(0x80 | (c & 0x3F)); }
+            else if (c < 0x10000) { tmp[k++] = (char)(0xE0 | c >> 12); tmp[k++] = (char)(0x80 | (c >> 6 & 0x3F)); tmp[k++] = (char)(0x80 | (c & 0x3F)); }
+            else { tmp[k++] = (char)(0xF0 | c >> 18); tmp[k++] = (char)(0x80 | (c >> 12 & 0x3F)); tmp[k++] = (char)(0x80 | (c >> 6 & 0x3F)); tmp[k++] = (char)(0x80 | (c & 0x3F)); }
         }
         tmp[k] = 0;
         song_to_latin1(out, size, tmp, k);

@@ -18,6 +18,9 @@
 #include "../pico/game/usdb.h"
 #include "../pico/game/pclink.h"
 #include "../pico/game/music.h"
+#include "../pico/game/platform.h"
+#include "../pico/game/pcfs.h"
+#include "../pico/game/game_int.h"
 
 static int fails;
 #define CHECK(c, ...) do { if (!(c)) { printf("FAIL %d: ", __LINE__); printf(__VA_ARGS__); printf("\n"); fails++; } } while (0)
@@ -161,12 +164,24 @@ static struct {
     char last_open[200];
     uint32_t starts_at;           // the opened video plays from then on
     bool usdb_logged;
+    int sing_reqs;
 } pc;
 
 static int32_t pc_time(void) { return pc.playing ? pc.base + (int32_t)(now - pc.since) : pc.base; }
 static void pc_set_playing(bool on) { pc.base = pc_time(); pc.since = (int32_t)now; pc.playing = on; }
 
 typedef struct { uint32_t last_t, last_v; char sent_title[80]; } scr_t;
+
+static void url_dec(char *o, size_t n, const char *s)
+{
+    size_t k = 0;
+    for (; *s && *s != '&' && k + 1 < n; s++)
+    {
+        if (*s == '%' && s[1] && s[2]) { char h[3] = { s[1], s[2], 0 }; o[k++] = (char)strtol(h, NULL, 16); s += 2; }
+        else o[k++] = *s == '+' ? ' ' : *s;
+    }
+    o[k] = 0;
+}
 
 static void pc_serve(fesp_conn_t *c, const char *req, size_t len)
 {
@@ -180,6 +195,42 @@ static void pc_serve(fesp_conn_t *c, const char *req, size_t len)
         scr_t *s = calloc(1, sizeof *s);
         s->last_t = now - 1000;
         *fesp_user(c) = s;
+        return;
+    }
+    // the PC's song folder (PicoAmp for Windows' karaoke folder)
+    if (!strncmp(path, "/sing/songs", 11) || !strncmp(path, "/sing/list", 10) || !strncmp(path, "/sing/file", 10))
+    {
+        char rel[300] = "";
+        const char *q = strstr(path, "path=");
+        if (q) url_dec(rel, sizeof rel, q + 5);
+        pc.sing_reqs++;
+        if (!strncmp(path, "/sing/songs", 11))
+        {
+            fesp_outs(c, "HTTP/1.0 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n"
+                         "Karaoke/Twinkle Twinkle Little Star/Twinkle Twinkle Little Star.txt\tTwinkle\tCaf\xc3\xa9 Star\t0\n"
+                         "Karaoke/Duo/duet.txt\tA Pair\tDuo\t1\n");
+        }
+        else if (!strncmp(path, "/sing/list", 10))
+        {
+            const char *b = !rel[0] ? "d Karaoke\nf notes.txt\n" : !strcmp(rel, "Karaoke") ? "d Twinkle Twinkle Little Star\nd Duo\nd Caf\xc3\xa9\n" :
+                            !strcmp(rel, "Karaoke/Twinkle Twinkle Little Star") ? "f Twinkle Twinkle Little Star.txt\nf Twinkle Twinkle Little Star.mp3\nf cover.jpg\n" : NULL;
+            if (!b) fesp_outs(c, "HTTP/1.0 404 Not Found\r\n\r\nno such folder\n");
+            else { fesp_outs(c, "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\n"); fesp_outs(c, b); }
+        }
+        else if (!strcmp(rel, "Karaoke/Twinkle Twinkle Little Star/Twinkle Twinkle Little Star.txt"))
+        {
+            fesp_outs(c, "HTTP/1.0 200 OK\r\nContent-Type: text/plain\r\n\r\n");
+            fesp_outs(c, song_txt);
+        }
+        else if (!strcmp(rel, "Karaoke/Twinkle Twinkle Little Star/cover.jpg"))
+        {
+            char h[120];
+            snprintf(h, sizeof h, "HTTP/1.0 200 OK\r\nContent-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", (unsigned)cover_len);
+            fesp_outs(c, h);
+            fesp_out(c, cover, cover_len);
+        }
+        else fesp_outs(c, "HTTP/1.0 404 Not Found\r\n\r\nnot here\n");
+        fesp_close(c);
         return;
     }
     if (!strncmp(path, "/sing/open", 10))
@@ -481,6 +532,89 @@ int main(int argc, char **argv)
     CHECK(strstr(pc.last_open, "/sing/open?q=ABBA+Dancing+Queen"), "a search: %s", pc.last_open);
     pc_stop();
     run(500, 0);
+
+    // ---- the song folder on the PC: its songs, a song's text, its folders and cover; its music on the PC
+    {
+        extern int sim_previews;
+        int r0 = pc.sing_reqs;
+        CHECK(plat_set_song_root("PC:/Karaoke") && !strcmp(plat_song_root(), "PC:/Karaoke"), "the PC's folder chosen");
+        CHECK(lib_count() == 2 && pc.sing_reqs == r0 + 1, "its 2 songs in one request (%d)", lib_count());
+        int tw = -1;
+        for (int i = 0; i < lib_count(); i++) if (!strcmp(lib_get(i)->artist, "Twinkle")) tw = i;
+        CHECK(tw >= 0 && !strcmp(lib_get(tw)->title, "Caf\xE9 Star") && !lib_get(tw)->duet, "artist and title, its accent (Latin-1)");
+        CHECK(tw >= 0 && !strcmp(lib_path(tw), "PC:/Karaoke/Twinkle Twinkle Little Star/Twinkle Twinkle Little Star.txt"), "its path: %s", tw >= 0 ? lib_path(tw) : "");
+        int du = tw == 0 ? 1 : 0;
+        CHECK(lib_get(du)->duet && !strcmp(lib_get(du)->title, "Duo"), "the duet");
+        static song_t ps;
+        char err[48] = "";
+        CHECK(tw >= 0 && plat_song_load(tw, &ps, err, sizeof err) && ps.n_notes > 0 && !strcmp(ps.audio, "Twinkle Twinkle Little Star.mp3"),
+              "its .txt from the PC: %d notes (%s)", ps.n_notes, err);
+        CHECK(!plat_song_load(du, &ps, err, sizeof err) && !strcmp(err, "NOT ON THE PC"), "a .txt that is not there: %s", err);
+        r0 = pc.sing_reqs;
+        CHECK(plat_exists("PC:/Karaoke/Twinkle Twinkle Little Star/cover.jpg") && plat_exists("PC:/Karaoke/Twinkle Twinkle Little Star/COVER.JPG") &&
+              !plat_exists("PC:/Karaoke/Twinkle Twinkle Little Star/folder.jpg") && pc.sing_reqs == r0 + 1, "exists: the folder asked once (%d)", pc.sing_reqs - r0);
+        CHECK(plat_stream_open("PC:/Karaoke/Twinkle Twinkle Little Star/cover.jpg", 0, 0), "the cover streamed");
+        static uint8_t got[1 << 20];
+        size_t gl = 0, k;
+        while ((k = plat_stream_read(got + gl, 700)) > 0 && gl < sizeof got - 700) gl += k;
+        plat_stream_close();
+        CHECK(gl == cover_len && !memcmp(got, cover, cover_len), "the cover's %u bytes, through the ring (%u)", (unsigned)cover_len, (unsigned)gl);
+        CHECK(!plat_stream_open("PC:/Karaoke/x.mp3", 1000, 100), "a picture inside an MP3: not from the PC");
+        plat_dirent_t de[8];
+        int dn = plat_list_dir("PC:/Karaoke", de, 8);
+        CHECK(dn == 3 && de[0].dir && !strcmp(de[0].name, "Twinkle Twinkle Little Star") && !strcmp(de[2].name, "Caf\xc3\xa9"), "a folder's list (%d)", dn);
+        CHECK(plat_list_dir("PC:/Nope", de, 8) < 0, "a folder that is not there");
+        int pv = sim_previews;
+        CHECK(!plat_audio_preview(tw, &ps, 5000) && sim_previews == pv, "no preview (its music is on the PC)");
+        CHECK(plat_fopen("PC:/Karaoke/x.txt", true) < 0 && !plat_remove("PC:/Karaoke/x.txt"), "nothing written there");
+        // its music: the PC plays the MP3
+        plat_song_load(tw, &ps, err, sizeof err);
+        CHECK(music_start(tw, &ps, err, sizeof err) && music_on_pc(), "the music starts on the PC (%s)", err);
+        run(3000, 0);
+        CHECK(!strcmp(pc.last_open, "/sing/open?file=Karaoke%2FTwinkle+Twinkle+Little+Star%2FTwinkle+Twinkle+Little+Star.mp3"), "it asks for the MP3: %s", pc.last_open);
+        run(2000, 0);
+        CHECK(pc_state() == PC_PLAYING && music_ms() > 2800 && music_ms() < 4000, "and follows its time (%d: no #VIDEOGAP for the MP3)", (int)music_ms());
+        music_stop();
+        run(500, 0);
+        // the PC does not answer: the card's folder stays
+        fesp_host_down("pc.test", true);
+        CHECK(!plat_set_song_root("PC:/Karaoke"), "no answer from the PC: not chosen");
+        CHECK(!strcmp(plat_song_root(), "PC:/Karaoke") && lib_count() == 2, "the PC's folder stays chosen, its list as it was (%d)", lib_count());
+        fesp_host_down("pc.test", false);
+        char cardk[600];
+        snprintf(cardk, sizeof cardk, "%s/KARAOKE", card);
+        CHECK(plat_set_song_root(cardk) && !strcmp(plat_card_root(), cardk), "back on the card");
+
+        // the song folder screen: from the card's top to the PC's folders, sing from one
+        gi_go(GS_FOLDERS);
+        run(50, 0);
+        for (int i = 0; i < 5; i++) { game_key(0x08); run(50, 0); }     // BS: up to the card's top (the simulator's card is a PC path)
+        shot("o8_card_top");
+        game_key(KEY_DOWN);
+        keys("\r");                             // [ THE PC'S FOLDERS ]
+        run(50, 0);
+        shot("o9_pc_folders");
+        game_key(KEY_DOWN); game_key(KEY_DOWN);
+        keys("\r");                             // Karaoke/
+        run(50, 0);
+        shot("o10_pc_karaoke");
+        keys("\r");                             // [ SING FROM THIS FOLDER ]
+        run(400, 0);
+        CHECK(game_state() == GS_SONGS && lib_count() == 2 && !strcmp(plat_song_root(), "PC:/Karaoke"), "chosen on the folder screen (%d, %d, %s)",
+              game_state(), lib_count(), plat_song_root());
+        shot("o11_pc_songs");
+        for (g_sel = 0; g_sel < lib_count() && strcmp(lib_get(g_sel)->artist, "Twinkle"); g_sel++) { }
+        gi_go(GS_DETAILS);
+        run(400, 0);
+        shot("o12_pc_details");
+        CHECK(game_state() == GS_DETAILS && !strcmp(game_song()->audio, "Twinkle Twinkle Little Star.mp3"), "its details, from the PC");
+        snprintf(p, sizeof p, "%s/SETTINGS.TXT", data);
+        st = load(p, &n);
+        CHECK(st && strstr(st, "ROOT=PC:/Karaoke"), "the PC's folder is remembered");
+        free(st);
+        plat_set_song_root(cardk);
+        settings_save();
+    }
     printf(fails ? "%d FAILED\n" : "ALL OK\n", fails);
     return fails != 0;
 }

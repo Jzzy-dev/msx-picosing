@@ -24,7 +24,7 @@ static char msg[48], title[96], title_at_open[96];
 static bool testing;
 
 // the command queue (paths on the PC)
-static char q[QN][200];
+static char q[QN][440];
 static int qh, qt;
 static bool open_sent;
 static uint32_t t_start, t_retry;
@@ -181,12 +181,13 @@ static bool cmd_body(web_t *w, const uint8_t *p, size_t n)
 static void cmd_done(web_t *w, bool ok)
 {
     // the open command's answer says whether the PC knows PicoSing
-    bool was_open = !strncmp(q[qh], "/sing/open", 10);
+    bool was_open = !strncmp(q[qh], "/sing/open", 10), was_file = !strncmp(q[qh], "/sing/open?file=", 16);
     qh = (qh + 1) % QN;
     if (!was_open) return;
     if (!ok)
     {
-        if (web_http(w) == 404 || web_http(w) == 400) set_msg("UPDATE PICOAMP FOR WINDOWS");
+        if (was_file && web_http(w) == 404) set_msg("THE MP3 IS NOT ON THE PC");
+        else if (web_http(w) == 404 || web_http(w) == 400) set_msg("UPDATE PICOAMP FOR WINDOWS");
         else { char m[48]; snprintf(m, sizeof m, "THE PC: %s", web_error_text(w)); set_msg(m); }
         state = PC_FAILED;
         web_abort(&w_scr);
@@ -209,7 +210,11 @@ static void start_screen(void)
     }
 }
 
-bool pc_start(const song_t *s)
+static bool start(const song_t *s, const char *file);
+bool pc_start(const song_t *s) { return start(s, NULL); }
+bool pc_start_file(const song_t *s, const char *file) { return start(s, file); }
+
+static bool start(const song_t *s, const char *file)
 {
     init();
     testing = false;
@@ -223,10 +228,15 @@ bool pc_start(const song_t *s)
     ignore_until = 0;
     t_retry = 0;
     pstate = 0;
-    gap = s->youtube[0] ? s->videogap_ms : 0;
-    // what to open: the song's YouTube video, else a search for it
-    char path[200], e[140];
-    if (s->youtube[0]) snprintf(path, sizeof path, "/sing/open?yt=%s", s->youtube);
+    gap = s->youtube[0] && !file ? s->videogap_ms : 0;
+    // what to open: the song's MP3 on the PC, its YouTube video, else a search for it
+    char path[440], e[400];
+    if (file)
+    {
+        if (!web_escape(e, sizeof e, file)) { set_msg("THE PATH IS TOO LONG"); state = PC_FAILED; return false; }
+        snprintf(path, sizeof path, "/sing/open?file=%s", e);
+    }
+    else if (s->youtube[0]) snprintf(path, sizeof path, "/sing/open?yt=%s", s->youtube);
     else
     {
         char what[120];
@@ -363,7 +373,7 @@ void pc_poll(void)
     {
         bool is_open = !strncmp(q[qh], "/sing/open", 10);
         if (is_open && state == PC_CONNECTING) return;
-        char url[280];
+        char url[520];
         snprintf(url, sizeof url, "http://%s%s", g_set.pc, q[qh]);
         cmd_reply_len = 0;
         if (is_open) open_sent = true;

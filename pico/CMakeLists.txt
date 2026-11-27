@@ -52,6 +52,7 @@ add_executable(picosing
     game/music.c
     game/pclink.c
     game/usdb.c
+    game/pcfs.c
     net/esp.c
     net/web.c
     game/synth.c

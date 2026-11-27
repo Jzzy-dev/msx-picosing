@@ -32,6 +32,7 @@ struct web
     esp_slot_t  slot;           // first: the ESP's slot is the request's
     uint8_t     st, conn, redirects, after, err, result;
     bool        held, aborting, tls, status_seen, body_end, stream;
+    bool        hold;           // the caller has no room: nothing more is asked for meanwhile
     uint16_t    http, port;
     char        host[64];
     char        path[424];

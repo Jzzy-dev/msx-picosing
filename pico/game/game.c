@@ -453,6 +453,7 @@ static void toggle_pause(void)
 void game_init(void)
 {
     settings_load();
+    plat_late_init();          // (a song folder on the PC: its address is in the settings)
     g_mic_delay = g_set.mic_delay;
     plat_set_volume(g_set.volume);
     singers_load();

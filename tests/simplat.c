@@ -6,6 +6,8 @@
 #include "../pico/game/library.h"
 #include "../pico/game/id3.h"
 #include "../pico/game/music.h"
+#include "../pico/game/pcfs.h"
+#include "fake_esp.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -36,8 +38,19 @@ static char *read_file(const char *path, size_t *len)
     return b;
 }
 
+// while a request to the PC is waited for: the simulated clock and network go on
+void plat_idle(void) { now++; fesp_tick(now); }
+
 bool plat_song_load(int i, song_t *s, char *err, int n)
 {
+    if (pcfs_is(lib_path(i)))
+    {
+        static char t[48 * 1024 + 1];
+        size_t tl;
+        if (!pcfs_read(lib_path(i), t, sizeof t - 1, &tl)) { snprintf(err, (size_t)n, "%s", pcfs_error()); return false; }
+        if (!song_parse(t, tl, s, false)) { snprintf(err, (size_t)n, "NOT AN ULTRASTAR SONG"); return false; }
+        return true;
+    }
     size_t len; char *b = read_file(lib_path(i), &len);
     if (!b) { snprintf(err, (size_t)n, "CANNOT READ THE SONG"); return false; }
     bool ok = song_parse(b, len, s, false);
@@ -75,9 +88,11 @@ int32_t plat_audio_ms(void)
     return t >= audio_len ? -1 : t;
 }
 
+int sim_previews;
 bool plat_audio_preview(int i, const song_t *s, int32_t from_ms)
 {
-    (void)i;
+    if (pcfs_is(lib_path(i))) return false;
+    sim_previews++;
     audio_t0 = (int32_t)now - from_ms;
     audio_len = song_length_ms(s) + 2500;
     return true;
@@ -109,7 +124,7 @@ static bool put(const char *path, const char *mode, const char *d, size_t n)
 }
 bool plat_write_file(const char *p, const char *d, size_t n) { return put(p, "wb", d, n); }
 bool plat_append_file(const char *p, const char *d, size_t n) { return put(p, "ab", d, n); }
-bool plat_exists(const char *path) { struct stat st; return stat(path, &st) == 0; }
+bool plat_exists(const char *path) { if (pcfs_is(path)) return pcfs_exists(path); struct stat st; return stat(path, &st) == 0; }
 bool plat_song_dir(int i, char *dir, size_t size)
 {
     snprintf(dir, size, "%s", lib_path(i));
@@ -121,8 +136,12 @@ bool plat_song_dir(int i, char *dir, size_t size)
 
 static FILE *sf;
 static uint32_t s_left;
+static bool sf_pc;
 bool plat_stream_open(const char *path, uint32_t off, uint32_t len)
 {
+    plat_stream_close();
+    sf_pc = pcfs_is(path);
+    if (sf_pc) return pcfs_stream_open(path, off, len);
     sf = fopen(path, "rb");
     if (!sf) return false;
     fseek(sf, off, SEEK_SET);
@@ -131,19 +150,20 @@ bool plat_stream_open(const char *path, uint32_t off, uint32_t len)
 }
 size_t plat_stream_read(uint8_t *buf, size_t n)
 {
+    if (sf_pc) return pcfs_stream_read(buf, n);
     if (!sf) return 0;
     if (n > s_left) n = s_left;
     size_t r = fread(buf, 1, n, sf);
     s_left -= (uint32_t)r;
     return r;
 }
-void plat_stream_close(void) { if (sf) fclose(sf); sf = NULL; }
+void plat_stream_close(void) { if (sf_pc) { pcfs_stream_close(); sf_pc = false; } if (sf) fclose(sf); sf = NULL; }
 
 bool plat_song_tags(int i, const song_t *s, song_tags_t *t)
 {
     memset(t, 0, sizeof *t);
     char dir[600], p[800];
-    if (!s->audio[0] || !plat_song_dir(i, dir, sizeof dir)) return false;
+    if (!s->audio[0] || pcfs_is(lib_path(i)) || !plat_song_dir(i, dir, sizeof dir)) return false;
     snprintf(p, sizeof p, "%s/%s", dir, s->audio);
     id3_text_t x;
     if (!id3_read(p, &x)) return false;
@@ -154,7 +174,8 @@ bool plat_song_tags(int i, const song_t *s, song_tags_t *t)
     return true;
 }
 
-static char sim_root[1024];
+static char sim_root[1024], sim_card[1024];
+const char *plat_card_root(void) { return sim_card; }
 
 static int scan_dir(const char *dir, int depth)
 {
@@ -189,9 +210,18 @@ static int scan_dir(const char *dir, int depth)
 }
 
 const char *plat_song_root(void) { return sim_root; }
+void plat_late_init(void) { }
 bool plat_set_song_root(const char *path)
 {
+    if (pcfs_is(path))
+    {
+        int n = pcfs_scan(path);
+        if (n < 0) return false;          // (the list before stays)
+        snprintf(sim_root, sizeof sim_root, "%s", path);
+        return true;
+    }
     snprintf(sim_root, sizeof sim_root, "%s", path);
+    snprintf(sim_card, sizeof sim_card, "%s", path);
     lib_clear();
     int n = scan_dir(sim_root, 0);
     lib_sort();
@@ -207,6 +237,7 @@ void sim_scan(const char *root)
 
 int plat_list_dir(const char *path, plat_dirent_t *out, int max)
 {
+    if (pcfs_is(path)) return pcfs_list(path, out, max);
     DIR *d = opendir(path);
     if (!d) return -1;
     int n = 0;
@@ -225,12 +256,13 @@ int plat_list_dir(const char *path, plat_dirent_t *out, int max)
     closedir(d);
     return n;
 }
-bool plat_remove(const char *path) { return remove(path) == 0; }
+bool plat_remove(const char *path) { return !pcfs_is(path) && remove(path) == 0; }
 bool plat_rename(const char *a, const char *b) { return rename(a, b) == 0; }
 
 static FILE *fh[2];
 int plat_fopen(const char *path, bool write)
 {
+    if (pcfs_is(path)) return -1;
     for (int h = 0; h < 2; h++)
         if (!fh[h])
         {
